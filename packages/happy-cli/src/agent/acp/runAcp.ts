@@ -28,6 +28,7 @@ import {
   mergeAcpSessionConfigIntoMetadata,
 } from './sessionConfigMetadata';
 import type { SessionConfigOption, SessionModeState, SessionModelState } from '@agentclientprotocol/sdk';
+import { createAutoTaskMetadataUpdater } from '@/utils/taskMetadata';
 
 const TURN_TIMEOUT_MS = 5 * 60 * 1000;
 const ACP_EVENT_PREVIEW_CHARS = 240;
@@ -495,6 +496,10 @@ export async function runAcp(opts: {
     },
   });
   session = initialSession;
+  const updateAutoTaskMetadata = createAutoTaskMetadataUpdater({
+    getSession: () => session,
+    initialMetadata: metadata
+  });
 
   if (response) {
     try {
@@ -745,7 +750,7 @@ export async function runAcp(opts: {
         if (verbose) {
           logAcp('muted', `Outgoing modes from ${opts.agentName} (${modes.availableModes.length}), current=${modes.currentModeId}:`);
           for (const mode of modes.availableModes) {
-            logAcp('muted', `  mode=${mode.id} name=${mode.name}${formatOptionalDetail(mode.description, 160)}`);
+            logAcp('muted', `  mode=${mode.id} name=${mode.name}${formatOptionalDetail(mode.description ?? undefined, 160)}`);
           }
         }
         session.updateMetadata((currentMetadata) =>
@@ -823,6 +828,7 @@ export async function runAcp(opts: {
     if (!message.content.text) {
       return;
     }
+    updateAutoTaskMetadata(message.content.text);
 
     if (typeof message.meta?.permissionMode === 'string') {
       currentPermissionMode = message.meta.permissionMode;

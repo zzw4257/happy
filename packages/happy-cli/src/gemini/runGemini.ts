@@ -51,6 +51,7 @@ import {
   formatOptionsXml,
 } from '@/gemini/utils/optionsParser';
 import { ConversationHistory } from '@/gemini/utils/conversationHistory';
+import { createAutoTaskMetadataUpdater } from '@/utils/taskMetadata';
 
 
 /**
@@ -181,6 +182,10 @@ export async function runGemini(opts: {
     }
   });
   session = initialSession;
+  const updateAutoTaskMetadata = createAutoTaskMetadataUpdater({
+    getSession: () => session,
+    initialMetadata: metadata
+  });
 
   // Report to daemon (only if we have a real session)
   if (response) {
@@ -210,6 +215,7 @@ export async function runGemini(opts: {
   let currentModel: string | undefined = undefined;
 
   session.onUserMessage((message) => {
+    updateAutoTaskMetadata(message.content.text);
     // Resolve permission mode (validate) - same as Codex
     let messagePermissionMode = currentPermissionMode;
     if (message.meta?.permissionMode) {

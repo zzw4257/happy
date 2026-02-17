@@ -28,6 +28,7 @@ import { claudeLocal } from '@/claude/claudeLocal';
 import { createSessionScanner } from '@/claude/utils/sessionScanner';
 import { Session } from './session';
 import { applySandboxPermissionPolicy, resolveInitialClaudePermissionMode } from './utils/permissionMode';
+import { createAutoTaskMetadataUpdater } from '@/utils/taskMetadata';
 
 /** JavaScript runtime to use for spawning Claude Code */
 export type JsRuntime = 'node' | 'bun'
@@ -196,6 +197,10 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
 
     // Create realtime session
     const session = api.sessionSyncClient(response);
+    const updateAutoTaskMetadata = createAutoTaskMetadataUpdater({
+        getSession: () => session,
+        initialMetadata: metadata
+    });
 
     // Start Happy MCP server
     const happyServer = await startHappyServer(session);
@@ -264,6 +269,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     let currentAllowedTools: string[] | undefined = undefined; // Track current allowed tools
     let currentDisallowedTools: string[] | undefined = undefined; // Track current disallowed tools
     session.onUserMessage((message) => {
+        updateAutoTaskMetadata(message.content.text);
 
         // Resolve permission mode from meta - pass through as-is, mapping happens at SDK boundary
         let messagePermissionMode: PermissionMode | undefined = currentPermissionMode;
