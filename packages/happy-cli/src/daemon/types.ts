@@ -13,10 +13,20 @@ export interface TrackedSession {
   happySessionId?: string;
   happySessionMetadataFromLocalWebhook?: Metadata;
   pid: number;
+  /**
+   * Hash of the observed process command line for PID reuse safety.
+   * If present, we require this hash to match before SIGTERM by PID.
+   */
+  processCommandHash?: string;
   childProcess?: ChildProcess;
   error?: string;
   directoryCreated?: boolean;
   message?: string;
   /** tmux session identifier (format: session:window) */
   tmuxSessionId?: string;
+  /**
+   * Session adopted from on-disk marker after daemon restart.
+   * These sessions are kill-protected unless PID safety checks pass.
+   */
+  reattachedFromDiskMarker?: boolean;
 }
