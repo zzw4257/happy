@@ -13,6 +13,7 @@ This folder documents how Happy works internally, with a focus on protocol, back
 - session-protocol-claude.md: Claude-specific session-protocol flow (local vs remote launchers, dedupe/restarts).
 - permission-resolution.md: State-based permission mode resolution across app and CLI (including sandbox behavior).
 - happy-wire.md: Shared wire schemas/types package and migration notes.
+- plans/task-tree-daemon-quality.md: Task tree + known-session reattach + cross-platform CLI detection rollout/rollback notes.
 
 ## Conventions
 - Paths and field names reflect the current implementation in `packages/happy-server`.
