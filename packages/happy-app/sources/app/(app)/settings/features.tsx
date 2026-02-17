@@ -14,6 +14,7 @@ export default function FeaturesSettingsScreen() {
     const [markdownCopyV2, setMarkdownCopyV2] = useLocalSettingMutable('markdownCopyV2');
     const [hideInactiveSessions, setHideInactiveSessions] = useSettingMutable('hideInactiveSessions');
     const [useEnhancedSessionWizard, setUseEnhancedSessionWizard] = useSettingMutable('useEnhancedSessionWizard');
+    const [taskTreeViewEnabled, setTaskTreeViewEnabled] = useSettingMutable('taskTreeViewEnabled');
 
     return (
         <ItemList style={{ paddingTop: 0 }}>
@@ -68,6 +69,18 @@ export default function FeaturesSettingsScreen() {
                         <Switch
                             value={useEnhancedSessionWizard}
                             onValueChange={setUseEnhancedSessionWizard}
+                        />
+                    }
+                    showChevron={false}
+                />
+                <Item
+                    title="Task Tree View"
+                    subtitle={taskTreeViewEnabled ? 'Task -> Machine -> Session view enabled' : 'Task -> Machine -> Session view disabled'}
+                    icon={<Ionicons name="git-branch-outline" size={29} color="#0A84FF" />}
+                    rightElement={
+                        <Switch
+                            value={taskTreeViewEnabled}
+                            onValueChange={setTaskTreeViewEnabled}
                         />
                     }
                     showChevron={false}
