@@ -5,7 +5,7 @@
 
 import { apiSocket } from './apiSocket';
 import { sync } from './sync';
-import type { MachineMetadata } from './storageTypes';
+import type { MachineMetadata, Metadata, Session } from './storageTypes';
 
 // Strict type definitions for all operations
 
@@ -37,6 +37,14 @@ interface SessionBashResponse {
     stderr: string;
     exitCode: number;
     error?: string;
+}
+
+interface DetectCLIResponse {
+    path: string | null;
+    clis: Record<'claude' | 'codex' | 'gemini', {
+        available: boolean;
+        resolvedPath?: string;
+    }>;
 }
 
 // Read file operation types
@@ -235,6 +243,43 @@ export async function machineBash(
 }
 
 /**
+ * Detect CLI availability on a machine via daemon PATH scanning.
+ */
+export async function machineDetectCLI(machineId: string): Promise<{
+    success: boolean;
+    path: string | null;
+    clis: Record<'claude' | 'codex' | 'gemini', {
+        available: boolean;
+        resolvedPath?: string;
+    }>;
+    error?: string;
+}> {
+    try {
+        const result = await apiSocket.machineRPC<DetectCLIResponse, {}>(
+            machineId,
+            'detect-cli',
+            {}
+        );
+        return {
+            success: true,
+            path: result.path ?? null,
+            clis: result.clis
+        };
+    } catch (error) {
+        return {
+            success: false,
+            path: null,
+            clis: {
+                claude: { available: false },
+                codex: { available: false },
+                gemini: { available: false }
+            },
+            error: error instanceof Error ? error.message : 'Unknown error'
+        };
+    }
+}
+
+/**
  * Update machine metadata with optimistic concurrency control and automatic retry
  */
 export async function machineUpdateMetadata(
@@ -297,6 +342,76 @@ export async function machineUpdateMetadata(
     }
 
     throw new Error('Unexpected error in machineUpdateMetadata');
+}
+
+/**
+ * Update session task metadata with optimistic concurrency and retry.
+ */
+export async function sessionUpdateTaskMetadata(
+    session: Pick<Session, 'id' | 'metadata' | 'metadataVersion'>,
+    task: NonNullable<Metadata['task']>,
+    maxRetries: number = 3
+): Promise<{
+    success: boolean;
+    version?: number;
+    metadata?: Metadata;
+    error?: string;
+}> {
+    if (!session.metadata) {
+        return { success: false, error: 'Session metadata is missing' };
+    }
+
+    const sessionEncryption = sync.encryption.getSessionEncryption(session.id);
+    if (!sessionEncryption) {
+        return { success: false, error: `Session encryption not found for ${session.id}` };
+    }
+
+    let currentVersion = session.metadataVersion;
+    let currentMetadata: Metadata = { ...session.metadata };
+    let attempt = 0;
+
+    while (attempt < maxRetries) {
+        const nextMetadata: Metadata = {
+            ...currentMetadata,
+            task: {
+                id: task.id,
+                title: task.title,
+                source: task.source,
+                updatedAt: task.updatedAt,
+            }
+        };
+
+        const encryptedMetadata = await sessionEncryption.encryptRaw(nextMetadata);
+        const result = await apiSocket.emitWithAck<{
+            result: 'success' | 'version-mismatch' | 'error';
+            version?: number;
+            metadata?: string;
+        }>('update-metadata', {
+            sid: session.id,
+            expectedVersion: currentVersion,
+            metadata: encryptedMetadata
+        });
+
+        if (result.result === 'success' && result.version !== undefined && result.metadata) {
+            const decryptedMetadata = await sessionEncryption.decryptRaw(result.metadata) as Metadata;
+            return {
+                success: true,
+                version: result.version,
+                metadata: decryptedMetadata
+            };
+        }
+
+        if (result.result === 'version-mismatch' && result.version !== undefined && result.metadata) {
+            currentVersion = result.version;
+            currentMetadata = await sessionEncryption.decryptRaw(result.metadata) as Metadata;
+            attempt++;
+            continue;
+        }
+
+        return { success: false, error: 'Failed to update session metadata' };
+    }
+
+    return { success: false, error: `Failed to update metadata after ${maxRetries} retries` };
 }
 
 /**

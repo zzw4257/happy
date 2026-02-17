@@ -1,9 +1,10 @@
 import { logger } from '@/ui/logger';
 import { exec, ExecOptions } from 'child_process';
 import { promisify } from 'util';
-import { readFile, writeFile, readdir, stat } from 'fs/promises';
+import { access, readFile, writeFile, readdir, stat } from 'fs/promises';
+import { constants as fsConstants } from 'fs';
 import { createHash } from 'crypto';
-import { join } from 'path';
+import { delimiter as PATH_DELIMITER, join } from 'path';
 import { run as runRipgrep } from '@/modules/ripgrep/index';
 import { run as runDifftastic } from '@/modules/difftastic/index';
 import { RpcHandlerManager } from '../../api/rpc/RpcHandlerManager';
@@ -23,6 +24,55 @@ interface BashResponse {
     stderr?: string;
     exitCode?: number;
     error?: string;
+}
+
+type DetectCliName = 'claude' | 'codex' | 'gemini';
+
+interface DetectCliRequest {
+    // reserved
+}
+
+interface DetectCliEntry {
+    available: boolean;
+    resolvedPath?: string;
+}
+
+interface DetectCliResponse {
+    path: string | null;
+    clis: Record<DetectCliName, DetectCliEntry>;
+}
+
+async function resolveCommandOnPath(command: string, pathEnv: string | null): Promise<string | null> {
+    if (!pathEnv) {
+        return null;
+    }
+
+    const pathEntries = pathEnv
+        .split(PATH_DELIMITER)
+        .map(entry => entry.trim())
+        .filter(Boolean);
+
+    const isWindows = process.platform === 'win32';
+    const extensions = isWindows
+        ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM')
+            .split(';')
+            .map(entry => entry.trim())
+            .filter(Boolean)
+        : [''];
+
+    for (const dir of pathEntries) {
+        for (const ext of extensions) {
+            const candidate = join(dir, isWindows ? `${command}${ext}` : command);
+            try {
+                await access(candidate, isWindows ? fsConstants.F_OK : fsConstants.X_OK);
+                return candidate;
+            } catch {
+                // continue
+            }
+        }
+    }
+
+    return null;
 }
 
 interface ReadFileRequest {
@@ -229,6 +279,24 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager, wor
             });
             return result;
         }
+    });
+
+    // Detect CLI availability without relying on interactive shells.
+    rpcHandlerManager.registerHandler<DetectCliRequest, DetectCliResponse>('detect-cli', async () => {
+        const pathEnv = typeof process.env.PATH === 'string' ? process.env.PATH : null;
+        const names: DetectCliName[] = ['claude', 'codex', 'gemini'];
+        const pairs = await Promise.all(
+            names.map(async (name) => {
+                const resolvedPath = await resolveCommandOnPath(name, pathEnv);
+                const entry: DetectCliEntry = resolvedPath ? { available: true, resolvedPath } : { available: false };
+                return [name, entry] as const;
+            })
+        );
+
+        return {
+            path: pathEnv,
+            clis: Object.fromEntries(pairs) as Record<DetectCliName, DetectCliEntry>,
+        };
     });
 
     // Read file handler - returns base64 encoded content
