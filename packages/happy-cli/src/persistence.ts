@@ -220,6 +220,7 @@ interface Settings {
   machineIdConfirmedByServer?: boolean
   daemonAutoStartWhenRunningHappy?: boolean
   chromeMode?: boolean  // Default Chrome mode setting for Claude
+  defaultAgent?: 'claude' | 'codex' | 'gemini' // Default agent when running `happy` without subcommands
   // Profile management settings (synced with happy app)
   activeProfileId?: string
   profiles: AIBackendProfile[]
@@ -231,6 +232,7 @@ interface Settings {
 const defaultSettings: Settings = {
   schemaVersion: SUPPORTED_SCHEMA_VERSION,
   onboardingCompleted: false,
+  defaultAgent: 'claude',
   profiles: [],
   sandboxConfig: undefined,
   localEnvironmentVariables: {}
