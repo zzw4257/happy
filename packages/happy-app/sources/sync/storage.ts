@@ -20,6 +20,7 @@ import { isMutableTool } from "@/components/tools/knownTools";
 import { projectManager } from "./projectManager";
 import { DecryptedArtifact } from "./artifactTypes";
 import { FeedItem } from "./feedTypes";
+import { buildTaskTree } from "./taskTree";
 
 // Debounce timer for realtimeMode changes
 let realtimeModeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -64,6 +65,8 @@ export type SessionListViewItem =
     | { type: 'header'; title: string }
     | { type: 'active-sessions'; sessions: Session[] }
     | { type: 'project-group'; displayPath: string; machine: Machine }
+    | { type: 'task-group'; taskId: string; title: string; source: 'auto' | 'manual'; sessionCount: number; sessionIds: string[] }
+    | { type: 'task-machine-group'; taskId: string; machineId: string; machine: Machine | null; sessionCount: number }
     | { type: 'session'; session: Session; variant?: 'default' | 'no-path' };
 
 // Legacy type for backward compatibility - to be removed
@@ -148,8 +151,43 @@ interface StorageState {
     clearFeed: () => void;
 }
 
+function buildTaskTreeListViewData(
+    sessions: Record<string, Session>,
+    machines: Record<string, Machine>
+): SessionListViewItem[] {
+    const tasks = buildTaskTree(sessions, machines);
+    const listData: SessionListViewItem[] = [];
+
+    for (const task of tasks) {
+        listData.push({
+            type: 'task-group',
+            taskId: task.id,
+            title: task.title,
+            source: task.source,
+            sessionCount: task.sessionCount,
+            sessionIds: task.sessionIds,
+        });
+
+        for (const machineNode of task.machines) {
+            listData.push({
+                type: 'task-machine-group',
+                taskId: task.id,
+                machineId: machineNode.machineId,
+                machine: machineNode.machine,
+                sessionCount: machineNode.sessions.length,
+            });
+
+            for (const session of machineNode.sessions) {
+                listData.push({ type: 'session', session });
+            }
+        }
+    }
+
+    return listData;
+}
+
 // Helper function to build unified list view data from sessions and machines
-function buildSessionListViewData(
+function buildDefaultSessionListViewData(
     sessions: Record<string, Session>
 ): SessionListViewItem[] {
     // Separate active and inactive sessions
@@ -242,6 +280,18 @@ function buildSessionListViewData(
     }
 
     return listData;
+}
+
+function buildSessionListViewData(
+    sessions: Record<string, Session>,
+    machines: Record<string, Machine>,
+    settings: Settings
+): SessionListViewItem[] {
+    const taskTreeEnabled = settings.experiments && settings.taskTreeViewEnabled;
+    if (taskTreeEnabled) {
+        return buildTaskTreeListViewData(sessions, machines);
+    }
+    return buildDefaultSessionListViewData(sessions);
 }
 
 export const storage = create<StorageState>()((set, get) => {
@@ -449,7 +499,9 @@ export const storage = create<StorageState>()((set, get) => {
 
             // Build new unified list view data
             const sessionListViewData = buildSessionListViewData(
-                mergedSessions
+                mergedSessions,
+                state.machines,
+                state.settings
             );
 
             // Update project manager with current sessions and machines
@@ -628,19 +680,32 @@ export const storage = create<StorageState>()((set, get) => {
             return result;
         }),
         applySettingsLocal: (settings: Partial<Settings>) => set((state) => {
-            saveSettings(applySettings(state.settings, settings), state.settingsVersion ?? 0);
+            const mergedSettings = applySettings(state.settings, settings);
+            saveSettings(mergedSettings, state.settingsVersion ?? 0);
+            const sessionListViewData = buildSessionListViewData(
+                state.sessions,
+                state.machines,
+                mergedSettings
+            );
             return {
                 ...state,
-                settings: applySettings(state.settings, settings)
+                settings: mergedSettings,
+                sessionListViewData
             };
         }),
         applySettings: (settings: Settings, version: number) => set((state) => {
             if (state.settingsVersion === null || state.settingsVersion < version) {
                 saveSettings(settings, version);
+                const sessionListViewData = buildSessionListViewData(
+                    state.sessions,
+                    state.machines,
+                    settings
+                );
                 return {
                     ...state,
                     settings,
-                    settingsVersion: version
+                    settingsVersion: version,
+                    sessionListViewData
                 };
             } else {
                 return state;
@@ -768,7 +833,9 @@ export const storage = create<StorageState>()((set, get) => {
 
             // Rebuild sessionListViewData to update the UI immediately
             const sessionListViewData = buildSessionListViewData(
-                updatedSessions
+                updatedSessions,
+                state.machines,
+                state.settings
             );
 
             return {
@@ -859,7 +926,9 @@ export const storage = create<StorageState>()((set, get) => {
 
             // Rebuild sessionListViewData to reflect machine changes
             const sessionListViewData = buildSessionListViewData(
-                state.sessions
+                state.sessions,
+                mergedMachines,
+                state.settings
             );
 
             return {
@@ -932,7 +1001,11 @@ export const storage = create<StorageState>()((set, get) => {
             saveSessionPermissionModes(modes);
             
             // Rebuild sessionListViewData without the deleted session
-            const sessionListViewData = buildSessionListViewData(remainingSessions);
+            const sessionListViewData = buildSessionListViewData(
+                remainingSessions,
+                state.machines,
+                state.settings
+            );
             
             return {
                 ...state,

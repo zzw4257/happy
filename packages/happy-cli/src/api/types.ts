@@ -232,6 +232,12 @@ export const MessageContentSchema = z.union([UserMessageSchema, AgentMessageSche
 export type MessageContent = z.infer<typeof MessageContentSchema>
 
 export type Metadata = {
+  task?: {
+    id: string,
+    title: string,
+    source: 'auto' | 'manual',
+    updatedAt: number,
+  },
   /**
    * ACP session config option value (normalized for UI metadata consumers).
    */

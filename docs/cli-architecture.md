@@ -44,6 +44,7 @@ graph TB
 - **Daemon:** `src/daemon` runs in the background, spawns sessions, and maintains machine state.
 - **Persistence/config:** `src/persistence.ts` + `src/configuration.ts` manage local state in `~/.happy`.
 - **Agents:** `src/claude`, `src/codex`, `src/gemini` provide provider-specific runners.
+- **Shared daemon lifecycle:** `src/utils/daemonLifecycle.ts` provides `ensureDaemonRunning()` and default-agent resolution used by all agent entry paths.
 
 ## CLI entry flow
 
@@ -54,7 +55,7 @@ flowchart TD
     Parse --> Doctor{doctor?}
     Parse --> Auth{auth?}
     Parse --> Connect{connect?}
-    Parse --> Agent{codex/gemini?}
+    Parse --> Agent{claude/codex/gemini/acp?}
     Parse --> Default{default}
 
     Doctor --> RunDoctor[Run diagnostics]
@@ -74,7 +75,8 @@ flowchart TD
 `src/index.ts` is the CLI router. It:
 - Parses subcommands (`doctor`, `auth`, `connect`, `codex`, `gemini`, and default run flows).
 - Ensures auth and machine setup when needed (`authAndSetupMachineIfNeeded`).
-- Starts the daemon or runs an agent directly based on subcommand/context.
+- Uses `ensureDaemonRunning()` for all agent flows (`claude`, `codex`, `gemini`, `acp`).
+- Routes bare `happy` to the configured `defaultAgent` from settings (`claude` by default for backward compatibility).
 
 ## Local state and configuration
 
@@ -85,6 +87,7 @@ graph LR
         settings["settings.json<br/><i>profile, onboarding</i>"]
         access["access.key<br/><i>encryption keys</i>"]
         daemon["daemon.state.json<br/><i>PID, port, version</i>"]
+        markers["tmp/daemon-sessions/<br/><i>pid markers for reattach</i>"]
         logs["logs/<br/><i>CLI/daemon logs</i>"]
     end
 
@@ -96,20 +99,24 @@ graph LR
         E4[HAPPY_VARIANT]
         E5[HAPPY_EXPERIMENTAL]
         E6[HAPPY_DISABLE_CAFFEINATE]
+        E7[HAPPY_DAEMON_REATTACH_ENABLED]
     end
 
-    E1 -.-> settings & access & daemon & logs
+    E1 -.-> settings & access & daemon & markers & logs
 ```
 
 Local state lives under `~/.happy` (or `HAPPY_HOME_DIR`):
 - `settings.json`: onboarding and profile settings (validated/migrated).
+  - Includes CLI-only defaults such as `defaultAgent`.
 - `access.key`: local key material for encryption/auth.
 - `daemon.state.json`: daemon PID + control port + version.
+- `tmp/daemon-sessions/pid-<pid>.json`: marker files used for known-session reattach after daemon restarts.
 - `logs/`: CLI/daemon logs.
 
 Configuration lives in `src/configuration.ts`:
 - `HAPPY_SERVER_URL` and `HAPPY_WEBAPP_URL` override defaults.
 - `HAPPY_VARIANT`, `HAPPY_EXPERIMENTAL`, `HAPPY_DISABLE_CAFFEINATE` control behavior.
+- `HAPPY_DAEMON_REATTACH_ENABLED=0` disables startup reattach from marker files.
 
 ## API client architecture
 
@@ -215,6 +222,21 @@ graph TB
 ```
 
 The daemon is a long-lived process responsible for running sessions in the background and maintaining machine presence.
+
+### Known session reattach and PID safety
+
+On startup, daemon can reattach to previously known sessions without server schema changes:
+
+1. Session webhook writes local marker: `~/.happy/tmp/daemon-sessions/pid-<pid>.json`.
+2. Marker stores `pid`, `sessionId`, `startedBy`, metadata snapshot, and `processCommandHash`.
+3. On daemon restart, markers are filtered by:
+   - current `HAPPY_HOME_DIR`,
+   - alive PID,
+   - allowed Happy process class (`doctor.ts` classification),
+   - matching command hash (fail-closed).
+4. `stop-session` uses PID safety check before SIGTERM for externally started/reattached sessions.
+
+This minimizes false positives in PID-reuse scenarios. Use `HAPPY_DAEMON_REATTACH_ENABLED=0` to disable reattach.
 
 ### Lifecycle
 
@@ -368,6 +390,7 @@ sequenceDiagram
 
 RPC is used to send commands over the Socket.IO connection:
 - Sessions register RPC handlers (e.g., `bash`, file read/write, `ripgrep`, `difftastic`).
+- Common machine/session handlers include `detect-cli` (PATH/PATHEXT scan) for cross-platform CLI detection.
 - The daemon registers a spawn-session handler so the server/mobile client can ask it to start a local session.
 
 This mechanism allows the server and mobile clients to drive local actions without exposing a broad REST surface.

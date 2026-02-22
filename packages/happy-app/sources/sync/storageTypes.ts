@@ -5,6 +5,12 @@ import { z } from "zod";
 //
 
 export const MetadataSchema = z.object({
+    task: z.object({
+        id: z.string(),
+        title: z.string(),
+        source: z.enum(['auto', 'manual']),
+        updatedAt: z.number(),
+    }).optional(),
     models: z.array(z.object({
         code: z.string(),
         value: z.string(),

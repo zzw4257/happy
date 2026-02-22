@@ -15,7 +15,7 @@ import { authAndSetupMachineIfNeeded } from './ui/auth'
 import packageJson from '../package.json'
 import { z } from 'zod'
 import { startDaemon } from './daemon/run'
-import { checkIfDaemonRunningAndCleanupStaleState, isDaemonRunningCurrentlyInstalledHappyVersion, stopDaemon } from './daemon/controlClient'
+import { checkIfDaemonRunningAndCleanupStaleState, stopDaemon } from './daemon/controlClient'
 import { getLatestDaemonLog } from './ui/logger'
 import { killRunawayHappyProcesses } from './daemon/doctor'
 import { install } from './daemon/install'
@@ -30,6 +30,7 @@ import { spawnHappyCLI } from './utils/spawnHappyCLI'
 import { claudeCliPath } from './claude/claudeLocal'
 import { execFileSync } from 'node:child_process'
 import { extractNoSandboxFlag } from './utils/sandboxFlags'
+import { ensureDaemonRunning, resolveDefaultAgent } from './utils/daemonLifecycle'
 
 
 (async () => {
@@ -114,6 +115,7 @@ import { extractNoSandboxFlag } from './utils/sandboxFlags'
       const {
         credentials
       } = await authAndSetupMachineIfNeeded();
+      await ensureDaemonRunning();
       await runCodex({credentials, startedBy, noSandbox: codexArgs.noSandbox});
       // Do not force exit here; allow instrumentation to show lingering handles
     } catch (error) {
@@ -319,19 +321,7 @@ import { extractNoSandboxFlag } from './utils/sandboxFlags'
       const {
         credentials
       } = await authAndSetupMachineIfNeeded();
-
-      // Auto-start daemon for gemini (same as claude)
-      logger.debug('Ensuring Happy background service is running & matches our version...');
-      if (!(await isDaemonRunningCurrentlyInstalledHappyVersion())) {
-        logger.debug('Starting Happy background service...');
-        const daemonProcess = spawnHappyCLI(['daemon', 'start-sync'], {
-          detached: true,
-          stdio: 'ignore',
-          env: process.env
-        });
-        daemonProcess.unref();
-        await new Promise(resolve => setTimeout(resolve, 200));
-      }
+      await ensureDaemonRunning();
 
       await runGemini({credentials, startedBy});
     } catch (error) {
@@ -367,18 +357,7 @@ import { extractNoSandboxFlag } from './utils/sandboxFlags'
 
       const resolved = resolveAcpAgentConfig(acpArgs);
       const { credentials } = await authAndSetupMachineIfNeeded();
-
-      logger.debug('Ensuring Happy background service is running & matches our version...');
-      if (!(await isDaemonRunningCurrentlyInstalledHappyVersion())) {
-        logger.debug('Starting Happy background service...');
-        const daemonProcess = spawnHappyCLI(['daemon', 'start-sync'], {
-          detached: true,
-          stdio: 'ignore',
-          env: process.env
-        });
-        daemonProcess.unref();
-        await new Promise(resolve => setTimeout(resolve, 200));
-      }
+      await ensureDaemonRunning();
 
       await runAcp({
         credentials,
@@ -534,6 +513,43 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('happy doctor c
     }
     return;
   } else {
+    // Route bare `happy` to configured default agent (backward-compatible default: claude)
+    if (args.length === 0) {
+      const settings = await readSettings();
+      const defaultAgent = resolveDefaultAgent(settings.defaultAgent);
+
+      if (defaultAgent === 'codex') {
+        try {
+          const { runCodex } = await import('@/codex/runCodex');
+          const { credentials } = await authAndSetupMachineIfNeeded();
+          await ensureDaemonRunning();
+          await runCodex({ credentials, startedBy: undefined, noSandbox: false });
+        } catch (error) {
+          console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
+          if (process.env.DEBUG) {
+            console.error(error)
+          }
+          process.exit(1)
+        }
+        return;
+      }
+
+      if (defaultAgent === 'gemini') {
+        try {
+          const { runGemini } = await import('@/gemini/runGemini');
+          const { credentials } = await authAndSetupMachineIfNeeded();
+          await ensureDaemonRunning();
+          await runGemini({ credentials, startedBy: undefined });
+        } catch (error) {
+          console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
+          if (process.env.DEBUG) {
+            console.error(error)
+          }
+          process.exit(1)
+        }
+        return;
+      }
+    }
 
     // If the first argument is claude, remove it
     if (args.length > 0 && args[0] === 'claude') {
@@ -692,23 +708,7 @@ ${chalk.bold.cyan('Claude Code Options (from `claude --help`):')}
       credentials
     } = await authAndSetupMachineIfNeeded();
 
-    // Always auto-start daemon for simplicity
-    logger.debug('Ensuring Happy background service is running & matches our version...');
-
-    if (!(await isDaemonRunningCurrentlyInstalledHappyVersion())) {
-      logger.debug('Starting Happy background service...');
-
-      // Use the built binary to spawn daemon
-      const daemonProcess = spawnHappyCLI(['daemon', 'start-sync'], {
-        detached: true,
-        stdio: 'ignore',
-        env: process.env
-      })
-      daemonProcess.unref();
-
-      // Give daemon a moment to write PID & port file
-      await new Promise(resolve => setTimeout(resolve, 200));
-    }
+    await ensureDaemonRunning();
 
     // Start the CLI
     try {

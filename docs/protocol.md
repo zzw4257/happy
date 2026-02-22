@@ -81,6 +81,8 @@ Field names below match on-wire payloads.
   - `body`: `{ t: "update-session", id, metadata?, agentState? }`
   - `metadata`: `{ value, version }` or null
   - `agentState`: `{ value, version }` or null
+  - `metadata.value` is encrypted and can include app/CLI coordinated fields such as:
+    - `task`: `{ id, title, source: "auto" | "manual", updatedAt }`
 
 - `delete-session`
   - `body`: `{ t: "delete-session", sid }`
@@ -189,6 +191,11 @@ Field names below match on-wire payloads.
 - `rpc-call`
   - `{ method, params }` -> callback `{ ok, result? | error? }`
   - Server forwards to the registered socket via `rpc-request` (ack-based).
+  - Common machine RPC methods:
+    - `spawn-happy-session`
+    - `stop-session`
+    - `stop-daemon`
+    - `detect-cli` -> `{ path, clis: { claude|codex|gemini } }`
 
 ## HTTP endpoints by area
 See `api.md` for the full HTTP endpoint catalog and auth flows.

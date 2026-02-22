@@ -3,7 +3,7 @@ import { View, Pressable, FlatList, Platform } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 import { Text } from '@/components/StyledText';
 import { usePathname } from 'expo-router';
-import { SessionListViewItem } from '@/sync/storage';
+import { SessionListViewItem, storage } from '@/sync/storage';
 import { Ionicons } from '@expo/vector-icons';
 import { getSessionName, useSessionStatus, getSessionSubtitle, getSessionAvatarId } from '@/utils/sessionUtils';
 import { Avatar } from './Avatar';
@@ -15,18 +15,15 @@ import { useVisibleSessionListViewData } from '@/hooks/useVisibleSessionListView
 import { Typography } from '@/constants/Typography';
 import { Session } from '@/sync/storageTypes';
 import { StatusDot } from './StatusDot';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { StyleSheet } from 'react-native-unistyles';
 import { useIsTablet } from '@/utils/responsive';
 import { requestReview } from '@/utils/requestReview';
 import { UpdateBanner } from './UpdateBanner';
 import { layout } from './layout';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
 import { t } from '@/text';
-import { useRouter } from 'expo-router';
-import { Item } from './Item';
-import { ItemGroup } from './ItemGroup';
 import { useHappyAction } from '@/hooks/useHappyAction';
-import { sessionDelete } from '@/sync/ops';
+import { sessionDelete, sessionUpdateTaskMetadata } from '@/sync/ops';
 import { HappyError } from '@/utils/errors';
 import { Modal } from '@/modal';
 
@@ -59,6 +56,40 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: 16,
         paddingVertical: 10,
         backgroundColor: theme.colors.surface,
+    },
+    taskGroup: {
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        backgroundColor: theme.colors.surface,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: theme.colors.divider,
+    },
+    taskGroupPressable: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+    },
+    taskGroupMeta: {
+        fontSize: 11,
+        color: theme.colors.textSecondary,
+        marginTop: 2,
+        ...Typography.default(),
+    },
+    machineGroup: {
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        backgroundColor: theme.colors.groupped.background,
+    },
+    machineGroupTitle: {
+        fontSize: 12,
+        color: theme.colors.textSecondary,
+        ...Typography.default('semiBold'),
+    },
+    machineGroupSubtitle: {
+        fontSize: 11,
+        color: theme.colors.textSecondary,
+        marginTop: 2,
+        ...Typography.default(),
     },
     projectGroupTitle: {
         fontSize: 13,
@@ -200,11 +231,8 @@ export function SessionsList() {
     const data = useVisibleSessionListViewData();
     const pathname = usePathname();
     const isTablet = useIsTablet();
-    const navigateToSession = useNavigateToSession();
     const compactSessionView = useSetting('compactSessionView');
-    const router = useRouter();
     const selectable = isTablet;
-    const experiments = useSetting('experiments');
     const dataWithSelected = selectable ? React.useMemo(() => {
         return data?.map(item => ({
             ...item,
@@ -226,11 +254,73 @@ export function SessionsList() {
         );
     }
 
+    const handleRenameTask = React.useCallback(async (item: Extract<SessionListViewItem, { type: 'task-group' }>) => {
+        const nextTitle = await Modal.prompt(
+            'Rename Task',
+            'This updates task metadata for all sessions in this task.',
+            {
+                defaultValue: item.title,
+                confirmText: 'Rename',
+                cancelText: t('common.cancel')
+            }
+        );
+
+        if (!nextTitle) {
+            return;
+        }
+
+        const trimmedTitle = nextTitle.trim().slice(0, 72);
+        if (!trimmedTitle) {
+            return;
+        }
+
+        const state = storage.getState();
+        const targetSessions = item.sessionIds
+            .map(sessionId => state.sessions[sessionId])
+            .filter((session): session is Session => !!session);
+
+        if (targetSessions.length === 0) {
+            return;
+        }
+
+        const updatedAt = Date.now();
+        type SessionUpdate = Omit<Session, 'metadata'> & {
+            metadata: NonNullable<Session['metadata']>;
+        };
+        const updates = await Promise.all(targetSessions.map(async (session) => {
+            const result = await sessionUpdateTaskMetadata(session, {
+                id: item.taskId,
+                title: trimmedTitle,
+                source: 'manual',
+                updatedAt,
+            });
+            if (!result.success || !result.metadata || result.version === undefined) {
+                return null;
+            }
+            return {
+                ...session,
+                metadata: result.metadata,
+                metadataVersion: result.version,
+                updatedAt: Math.max(session.updatedAt, updatedAt),
+            } satisfies SessionUpdate;
+        }));
+
+        const successfulUpdates = updates.filter((session): session is SessionUpdate => !!session);
+        if (successfulUpdates.length === 0) {
+            Modal.alert(t('common.error'), 'Failed to rename task. Please try again.');
+            return;
+        }
+
+        storage.getState().applySessions(successfulUpdates);
+    }, []);
+
     const keyExtractor = React.useCallback((item: SessionListViewItem & { selected?: boolean }, index: number) => {
         switch (item.type) {
             case 'header': return `header-${item.title}-${index}`;
             case 'active-sessions': return 'active-sessions';
             case 'project-group': return `project-group-${item.machine.id}-${item.displayPath}-${index}`;
+            case 'task-group': return `task-group-${item.taskId}-${index}`;
+            case 'task-machine-group': return `task-machine-group-${item.taskId}-${item.machineId}-${index}`;
             case 'session': return `session-${item.session.id}`;
         }
     }, []);
@@ -274,13 +364,47 @@ export function SessionsList() {
                     </View>
                 );
 
+            case 'task-group':
+                return (
+                    <View style={styles.taskGroup}>
+                        <Pressable
+                            style={styles.taskGroupPressable}
+                            onPress={() => {
+                                void handleRenameTask(item);
+                            }}
+                        >
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.projectGroupTitle}>
+                                    {item.title}
+                                </Text>
+                                <Text style={styles.taskGroupMeta}>
+                                    {`${item.sessionCount} session${item.sessionCount === 1 ? '' : 's'} • ${item.source === 'manual' ? 'Manual' : 'Auto'}`}
+                                </Text>
+                            </View>
+                            <Ionicons name="create-outline" size={16} color="#8E8E93" />
+                        </Pressable>
+                    </View>
+                );
+
+            case 'task-machine-group':
+                return (
+                    <View style={styles.machineGroup}>
+                        <Text style={styles.machineGroupTitle}>
+                            {item.machine?.metadata?.displayName || item.machine?.metadata?.host || item.machineId}
+                        </Text>
+                        <Text style={styles.machineGroupSubtitle}>
+                            {`${item.sessionCount} session${item.sessionCount === 1 ? '' : 's'}`}
+                        </Text>
+                    </View>
+                );
+
             case 'session':
                 // Determine card styling based on position within date group
                 const prevItem = index > 0 && dataWithSelected ? dataWithSelected[index - 1] : null;
                 const nextItem = index < (dataWithSelected?.length || 0) - 1 && dataWithSelected ? dataWithSelected[index + 1] : null;
 
-                const isFirst = prevItem?.type === 'header';
-                const isLast = nextItem?.type === 'header' || nextItem == null || nextItem?.type === 'active-sessions';
+                const isFirst = !prevItem || prevItem.type !== 'session';
+                const isLast = !nextItem || nextItem.type !== 'session';
                 const isSingle = isFirst && isLast;
 
                 return (
@@ -293,7 +417,7 @@ export function SessionsList() {
                     />
                 );
         }
-    }, [pathname, dataWithSelected, compactSessionView]);
+    }, [pathname, dataWithSelected, compactSessionView, handleRenameTask]);
 
 
     // Remove this section as we'll use FlatList for all items now

@@ -33,6 +33,7 @@ import { setupOfflineReconnection } from '@/utils/setupOfflineReconnection';
 import type { ApiSessionClient } from '@/api/apiSession';
 import { resolveCodexExecutionPolicy } from './executionPolicy';
 import { mapCodexMcpMessageToSessionEnvelopes, mapCodexProcessorMessageToSessionEnvelopes } from './utils/sessionProtocolMapper';
+import { createAutoTaskMetadataUpdater } from '@/utils/taskMetadata';
 
 type ReadyEventOptions = {
     pending: unknown;
@@ -138,8 +139,12 @@ export async function runCodex(opts: {
                 permissionHandler.updateSession(newSession);
             }
         }
-    });
-    session = initialSession;
+  });
+  session = initialSession;
+  const updateAutoTaskMetadata = createAutoTaskMetadataUpdater({
+    getSession: () => session,
+    initialMetadata: metadata
+  });
 
     // Always report to daemon if it exists (skip if offline)
     if (response) {
@@ -167,6 +172,7 @@ export async function runCodex(opts: {
     let currentModel: string | undefined = undefined;
 
     session.onUserMessage((message) => {
+        updateAutoTaskMetadata(message.content.text);
         // Resolve permission mode (accept all modes, will be mapped in switch statement)
         let messagePermissionMode = currentPermissionMode;
         if (message.meta?.permissionMode) {

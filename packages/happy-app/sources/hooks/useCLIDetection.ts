@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { machineBash } from '@/sync/ops';
+import { machineBash, machineDetectCLI } from '@/sync/ops';
 
 interface CLIAvailability {
     claude: boolean | null; // null = unknown/loading, true = installed, false = not installed
@@ -55,6 +55,20 @@ export function useCLIDetection(machineId: string | null): CLIAvailability {
             console.log('[useCLIDetection] Starting detection for machineId:', machineId);
 
             try {
+                const detectCliResult = await machineDetectCLI(machineId);
+                if (cancelled) return;
+
+                if (detectCliResult.success) {
+                    setAvailability({
+                        claude: detectCliResult.clis.claude.available,
+                        codex: detectCliResult.clis.codex.available,
+                        gemini: detectCliResult.clis.gemini.available,
+                        isDetecting: false,
+                        timestamp: Date.now(),
+                    });
+                    return;
+                }
+
                 // Use single bash command to check both CLIs efficiently
                 // command -v is POSIX compliant and more reliable than which
                 const result = await machineBash(
@@ -97,7 +111,7 @@ export function useCLIDetection(machineId: string | null): CLIAvailability {
                         gemini: null,
                         isDetecting: false,
                         timestamp: 0,
-                        error: `Detection failed: ${result.stderr || 'Unknown error'}`,
+                        error: `Detection failed: ${result.stderr || detectCliResult.error || 'Unknown error'}`,
                     });
                 }
             } catch (error) {
